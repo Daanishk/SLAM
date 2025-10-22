@@ -196,15 +196,23 @@ def main():
         camera_pose = camera.entity.get_pose()
         camera_pos = np.array(camera_pose.get_p())
         camera_rot = np.array(camera_pose.get_rpy())
-        camera_mat = np.eye(4)
+        camera_mat = np.array(camera_pose.to_transformation_matrix())
+        new_mat = np.eye(4)
         if viewer.window.key_down("i"):
-            camera.entity.set_pose(sapien.Pose(camera_pos + np.array([1,0,0])))
+            new_mat[:3, 3] += np.array([1,0,0]) / 10
         if viewer.window.key_down("j"):
-            camera.entity.set_pose(sapien.Pose(camera_pos + np.array([0,-1,0])))
+            new_mat[:3, 3] += np.array([0,1,0]) / 10
         if viewer.window.key_down("k"):
-            camera.entity.set_pose(sapien.Pose(camera_pos + np.array([-1,0,0])))
+            new_mat[:3, 3] += np.array([-1,0,0]) / 10
         if viewer.window.key_down("l"):
-            camera.entity.set_pose(sapien.Pose(camera_pos + np.array([0,1,0])))
+            new_mat[:3, 3] += np.array([0,-1,0]) / 10
+        if viewer.window.key_down("u"):
+            new_mat[:2, :2] += np.array([[0,-1],[1,0]]) / 10
+        if viewer.window.key_down("o"):
+            new_mat[:2, :2] += np.array([[0,1],[-1,0]]) / 10
+        camera.entity.set_pose(sapien.Pose(np.matmul(camera_mat, new_mat)))
+        if viewer.window.key_down("m"):
+            viewer.set_camera_pose(sapien.Pose(np.matmul(camera_mat, new_mat)))
         viewer.render()
 
 
