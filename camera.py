@@ -12,7 +12,7 @@ from PIL import Image, ImageColor
 import trimesh
 from sapien.utils.viewer import Viewer
 from transforms3d.euler import mat2euler
-import json
+import cv2
 
 def main():
     scene = sapien.Scene()
@@ -24,51 +24,38 @@ def main():
     scene.add_point_light([1, 2, 2], [1, 1, 1])
     scene.add_point_light([1, -2, 2], [1, 1, 1])
     scene.add_point_light([-1, 0, 1], [1, 1, 1])
-    
-    with open('sample.json') as f:
-        floor = json.load(f)
-        for key in floor.keys():
-            room = floor[key]
-            width = room["width"]
-            height = 5
-            position = np.array([room["pos_x"],room["pos_y"], 0])
-            color = np.array([255, 0, 0])
+    image = cv2.imread("floor.png", cv2.IMREAD_COLOR)
+    unique_colors = np.unique(image.reshape(-1, image.shape[-1]), axis=0)
 
-            wall1_half_size = np.array([room["size_x"] - width, width, height])/2
-            wall1_center = position + np.array([width, width, 0]) + wall1_half_size
-            wall1_pose = sapien.Pose(wall1_center)
-            wall1_builder: sapien.ActorBuilder = scene.create_actor_builder()
-            wall1_builder.add_box_collision(half_size=wall1_half_size)  # Add collision shape
-            wall1_builder.add_box_visual(half_size=wall1_half_size, material=color)  # Add visual shape
-            wall1_box: sapien.Entity = wall1_builder.build(name=key + "wall1")
-            wall1_box.set_pose(wall1_pose)
+    width = 1
+    height = 5
 
-            wall2_half_size = np.array([room["size_x"] - width, width, height])/2
-            wall2_center = position + wall2_half_size + np.array([0, room["size_y"] - width, 0])
-            wall2_pose = sapien.Pose(wall2_center)
-            wall2_builder: sapien.ActorBuilder = scene.create_actor_builder()
-            wall2_builder.add_box_collision(half_size=wall2_half_size)  # Add collision shape
-            wall2_builder.add_box_visual(half_size=wall2_half_size, material=color)  # Add visual shape
-            wall2_box: sapien.Entity = wall2_builder.build(name=key + "wall2")
-            wall2_box.set_pose(wall2_pose)
+    img_shape = np.array(image.shape)
+    img_shape[2] = 0
+    pixel_map = image[:,:,0] * (256.0 ** 2) + image[:,:,1] * 256.0 + image[:,:,2]
+    for color in unique_colors:
+        # Ignore Background
+        if np.sum(color) == 255 + 255 + 255:
+            continue
+        color_rep = color[0] * (256.0 ** 2) + color[1] * 256.0 + color[2]
+        pixels = np.argwhere(pixel_map == color_rep)
+        pixels = pixels[:,:2]
+        pixels = np.unique(pixels, axis=0)
+        for pixel in pixels:
+            position = np.array([pixel[0], pixel[1], 0]) * width
+            # Theoretically, could add all walls as part of same Entity, but not sure if actually needed
+            wall_half_size = np.array([width, width, height])/2
+            wall_center = position + np.array([width, width, height])/2 - (img_shape / 2)
+            wall_pose = sapien.Pose(wall_center)
+            wall_builder: sapien.ActorBuilder = scene.create_actor_builder()
+            wall_builder.add_box_collision(half_size=wall_half_size)  # Add collision shape
+            wall_builder.add_box_visual(half_size=wall_half_size, material=color / 255)  # Add visual shape
+            wall_builder.set_initial_pose(wall_pose)
+            wall_box: sapien.Entity = wall_builder.build(name=str(pixel))
+            shapes = wall_box.get_components()
 
-            wall3_half_size = np.array([width, room["size_y"] - width, height])/2
-            wall3_center = position + np.array([width, width, 0]) + wall3_half_size
-            wall3_pose = sapien.Pose(wall3_center)
-            wall3_builder: sapien.ActorBuilder = scene.create_actor_builder()
-            wall3_builder.add_box_collision(half_size=wall3_half_size)  # Add collision shape
-            wall3_builder.add_box_visual(half_size=wall3_half_size, material=color)  # Add visual shape
-            wall3_box: sapien.Entity = wall3_builder.build(name=key + "wall3")
-            wall3_box.set_pose(wall3_pose)
-
-            wall4_half_size = np.array([width, room["size_y"] - width, height])/2
-            wall4_center = position + wall4_half_size + np.array([room["size_x"], 0, 0])
-            wall4_pose = sapien.Pose(wall4_center)
-            wall4_builder: sapien.ActorBuilder = scene.create_actor_builder()
-            wall4_builder.add_box_collision(half_size=wall4_half_size)  # Add collision shape
-            wall4_builder.add_box_visual(half_size=wall4_half_size, material=color)  # Add visual shape
-            wall4_box: sapien.Entity = wall4_builder.build(name=key + "wall4")
-            wall4_box.set_pose(wall4_pose)
+            # Set collision group so they all don't collide with each other
+            shapes[1].get_collision_shapes()[0].set_collision_groups([1,1,1,1])
 
     # ---------------------------------------------------------------------------- #
     # Camera
@@ -96,7 +83,7 @@ def main():
     )
     camera.entity.set_pose(sapien.Pose([0,1,0]))
 
-    print("Intrinsic matrix\n", camera.get_intrinsic_matrix())
+    # print("Intrinsic matrix\n", camera.get_intrinsic_matrix())
 
     camera_mount_actor = scene.create_actor_builder().build_kinematic()
     mounted_camera = scene.add_mounted_camera(
