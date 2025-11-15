@@ -1,0 +1,35 @@
+import numpy as np
+import cv2
+
+class Floor:
+    def __init__(self, tile_width, tile_length, wall_height):
+        self.tile_width = tile_width
+        self.tile_length = tile_length
+        self.wall_height = wall_height
+
+    def set_image(self, image_path):
+        self.tiles = cv2.cvtColor(cv2.imread(image_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+    def save_image(self, image_path):
+        if (self.tiles is not None):
+            cv2.imwrite(cv2.cvtColor(self.tiles, cv2.COLOR_RGB2BGR), image_path)
+
+    def get_free_mask(self):
+        # @TODO get mask of self.tiles that is free vs. obstacle or outside
+        pass
+
+    def similarity(self, other_floor):
+        # @TODO: Needed for error calculation
+        pass
+
+class PRMPlanner():
+    def __init__(self, floor):
+        self.floor = floor
+
+    def sample(self, num_samples):
+        # @TODO
+        pass
+
+    def plan(self, origin_pt, dest_pt):
+        # @TODO
+        pass

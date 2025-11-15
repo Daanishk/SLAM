@@ -14,6 +14,7 @@ from sapien.utils.viewer import Viewer
 from transforms3d.euler import mat2euler
 import cv2
 from roomba import *
+from floor import *
 
 def create_scene():
     scene = sapien.Scene()
@@ -27,8 +28,8 @@ def create_scene():
     scene.add_point_light([-1, 0, 1], [1, 1, 1])
     return scene
 
-def load_floor_plan(image_path, scene):
-    image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+def load_floor_plan(floor, scene):
+    image = floor.tiles
     unique_colors = np.unique(image.reshape(-1, image.shape[-1]), axis=0)
 
     width = 1
@@ -53,7 +54,6 @@ def load_floor_plan(image_path, scene):
             wall_pose = sapien.Pose(wall_center)
             wall_builder: sapien.ActorBuilder = scene.create_actor_builder()
             wall_builder.add_box_collision(half_size=wall_half_size)  # Add collision shape
-            # @TODO Fix colors. Might need to be BRG or something like that
             wall_builder.add_box_visual(half_size=wall_half_size, material=color / 255)  # Add visual shape
             wall_builder.set_initial_pose(wall_pose)
             wall_box: sapien.Entity = wall_builder.build(name=str(pixel))
@@ -64,7 +64,10 @@ def load_floor_plan(image_path, scene):
 
 def main():
     scene = create_scene()
-    load_floor_plan("floor.png", scene)
+
+    floor = Floor(1, 1, 5)
+    floor.set_image("floor.png")
+    load_floor_plan(floor, scene)
 
     # # ---------------------------------------------------------------------------- #
     # # XYZ position in the camera space
@@ -104,7 +107,6 @@ def main():
     # )
     # label0_image = seg_labels[..., 0].astype(np.uint8)  # mesh-level
     # label1_image = seg
-    def convert_depth_point_cloud_into_wall()_labels[..., 1].astype(np.uint8)  # actor-level
     # # Or you can use aliases below
     # # label0_image = camera.get_visual_segmentation()
     # # label1_image = camera.get_actor_segmentation()
