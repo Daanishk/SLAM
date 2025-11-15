@@ -13,8 +13,9 @@ import trimesh
 from sapien.utils.viewer import Viewer
 from transforms3d.euler import mat2euler
 import cv2
+from roomba import *
 
-def main():
+def create_scene():
     scene = sapien.Scene()
     scene.set_timestep(1 / 100.0)
     scene.add_ground(altitude=0)
@@ -24,7 +25,10 @@ def main():
     scene.add_point_light([1, 2, 2], [1, 1, 1])
     scene.add_point_light([1, -2, 2], [1, 1, 1])
     scene.add_point_light([-1, 0, 1], [1, 1, 1])
-    image = cv2.imread("floor.png", cv2.IMREAD_COLOR)
+    return scene
+
+def load_floor_plan(image_path, scene):
+    image = cv2.imread(image_path, cv2.IMREAD_COLOR)
     unique_colors = np.unique(image.reshape(-1, image.shape[-1]), axis=0)
 
     width = 1
@@ -49,6 +53,7 @@ def main():
             wall_pose = sapien.Pose(wall_center)
             wall_builder: sapien.ActorBuilder = scene.create_actor_builder()
             wall_builder.add_box_collision(half_size=wall_half_size)  # Add collision shape
+            # @TODO Fix colors. Might need to be BRG or something like that
             wall_builder.add_box_visual(half_size=wall_half_size, material=color / 255)  # Add visual shape
             wall_builder.set_initial_pose(wall_pose)
             wall_box: sapien.Entity = wall_builder.build(name=str(pixel))
@@ -57,57 +62,9 @@ def main():
             # Set collision group so they all don't collide with each other
             shapes[1].get_collision_shapes()[0].set_collision_groups([1,1,1,1])
 
-    # ---------------------------------------------------------------------------- #
-    # Camera
-    # ---------------------------------------------------------------------------- #
-    near, far = 0.1, 100
-    width, height = 640, 480
-
-    # Compute the camera pose by specifying forward(x), left(y) and up(z)
-    cam_pos = np.array([-2, -2, 3])
-    forward = -cam_pos / np.linalg.norm(cam_pos)
-    left = np.cross([0, 0, 1], forward)
-    left = left / np.linalg.norm(left)
-    up = np.cross(forward, left)
-    mat44 = np.eye(4)
-    mat44[:3, :3] = np.stack([forward, left, up], axis=1)
-    mat44[:3, 3] = cam_pos
-
-    camera = scene.add_camera(
-        name="camera",
-        width=width,
-        height=height,
-        fovy=np.deg2rad(35),
-        near=near,
-        far=far,
-    )
-    camera.entity.set_pose(sapien.Pose([0,1,0]))
-
-    # print("Intrinsic matrix\n", camera.get_intrinsic_matrix())
-
-    camera_mount_actor = scene.create_actor_builder().build_kinematic()
-    mounted_camera = scene.add_mounted_camera(
-        name="mounted_camera",
-        mount=camera_mount_actor,
-        pose=sapien.Pose(mat44),
-        width=width,
-        height=height,
-        fovy=np.deg2rad(35),
-        near=near,
-        far=far,
-    )
-
-    # scene.step()  # run a physical step
-    # scene.update_render()  # sync pose from SAPIEN to renderer
-    # camera.take_picture()  # submit rendering jobs to the GPU
-
-    # # ---------------------------------------------------------------------------- #
-    # # RGBA
-    # # ---------------------------------------------------------------------------- #
-    # rgba = camera.get_picture("Color")  # [H, W, 4]
-    # rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
-    # rgba_pil = Image.fromarray(rgba_img)
-    # rgba_pil.save("color.png")
+def main():
+    scene = create_scene()
+    load_floor_plan("floor.png", scene)
 
     # # ---------------------------------------------------------------------------- #
     # # XYZ position in the camera space
@@ -146,7 +103,8 @@ def main():
     #     [ImageColor.getrgb(color) for color in colormap], dtype=np.uint8
     # )
     # label0_image = seg_labels[..., 0].astype(np.uint8)  # mesh-level
-    # label1_image = seg_labels[..., 1].astype(np.uint8)  # actor-level
+    # label1_image = seg
+    def convert_depth_point_cloud_into_wall()_labels[..., 1].astype(np.uint8)  # actor-level
     # # Or you can use aliases below
     # # label0_image = camera.get_visual_segmentation()
     # # label1_image = camera.get_actor_segmentation()
@@ -160,9 +118,14 @@ def main():
     # ---------------------------------------------------------------------------- #
     viewer = Viewer()
     viewer.set_scene(scene)
+
+    half_size = np.array([0.1, 0.1, 0.1])
+
+    roomba = Roomba(scene, viewer)
+
     # We show how to set the viewer according to the pose of a camera
     # opengl camera -> sapien world
-    model_matrix = camera.get_model_matrix()
+    model_matrix = roomba.camera.get_model_matrix()
     # sapien camera -> sapien world
     # You can also infer it from the camera pose
     model_matrix = model_matrix[:, [2, 0, 1, 3]] * np.array([-1, -1, 1, 1])
@@ -171,35 +134,14 @@ def main():
     viewer.set_camera_xyz(*model_matrix[0:3, 3])
     viewer.set_camera_rpy(*rpy)
     viewer.window.set_camera_parameters(near=0.05, far=100, fovy=1)
+
+    controller = TrajectoryController([np.array([2,-1,0])])
+    roomba.set_controller(controller)
+
     while not viewer.closed:
         scene.step()
         scene.update_render()
-        if viewer.window.key_down("p"):  # Press 'p' to take the screenshot
-            camera.take_picture()  # submit rendering jobs to the GPU
-            rgba = camera.get_picture("Color")  # [H, W, 4]
-            rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
-            rgba_pil = Image.fromarray(rgba_img)
-            rgba_pil.save("color.png")
-        camera_pose = camera.entity.get_pose()
-        camera_pos = np.array(camera_pose.get_p())
-        camera_rot = np.array(camera_pose.get_rpy())
-        camera_mat = np.array(camera_pose.to_transformation_matrix())
-        new_mat = np.eye(4)
-        if viewer.window.key_down("i"):
-            new_mat[:3, 3] += np.array([1,0,0]) / 10
-        if viewer.window.key_down("j"):
-            new_mat[:3, 3] += np.array([0,1,0]) / 10
-        if viewer.window.key_down("k"):
-            new_mat[:3, 3] += np.array([-1,0,0]) / 10
-        if viewer.window.key_down("l"):
-            new_mat[:3, 3] += np.array([0,-1,0]) / 10
-        if viewer.window.key_down("u"):
-            new_mat[:2, :2] += np.array([[0,-1],[1,0]]) / 10
-        if viewer.window.key_down("o"):
-            new_mat[:2, :2] += np.array([[0,1],[-1,0]]) / 10
-        camera.entity.set_pose(sapien.Pose(np.matmul(camera_mat, new_mat)))
-        if viewer.window.key_down("m"):
-            viewer.set_camera_pose(sapien.Pose(np.matmul(camera_mat, new_mat)))
+        roomba.perform_action(scene.get_timestep())
         viewer.render()
 
 
