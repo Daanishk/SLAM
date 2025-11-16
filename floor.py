@@ -28,15 +28,3 @@ class Floor:
     def similarity(self, other_floor):
         # @TODO: Needed for error calculation
         pass
-
-class PRMPlanner():
-    def __init__(self, floor):
-        self.floor = floor
-
-    def sample(self, num_samples):
-        # @TODO
-        pass
-
-    def plan(self, origin_pt, dest_pt):
-        # @TODO
-        pass
