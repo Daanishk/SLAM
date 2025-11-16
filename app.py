@@ -15,7 +15,7 @@ from transforms3d.euler import mat2euler
 import cv2
 from roomba import *
 from floor import *
-from point_cloud import visualize_roomba_cloud
+from point_cloud import *
 
 def create_scene():
     scene = sapien.Scene()
@@ -156,7 +156,7 @@ def main():
 
         viewer.render()
 
-    visualize_roomba_cloud("depth.png", "color.png")
+    visualize_merged_snapshots()
 
 if __name__ == "__main__":
     main()

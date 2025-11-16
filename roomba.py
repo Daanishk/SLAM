@@ -14,6 +14,9 @@ class Roomba:
         width, height = 640, 480
         half_size = np.array([0.1, 0.1, 0.1])
 
+        # idx for file saving
+        self.snapshot_idx = 0
+
         # Create Roomba with attached actor
 
         actor_builder = scene.create_actor_builder()
@@ -51,27 +54,23 @@ class Roomba:
     def stop(self):
         self.camera_body.set_linear_velocity(np.array([0,0,0]))
 
-    def take_picture(self):
-        self.camera.take_picture()  # submit rendering jobs to the GPU
+    def take_snapshot(self):
+        self.camera.take_picture()
+        idx_str = f"{self.snapshot_idx:03d}" 
+
         rgba = self.camera.get_picture("Color")  # [H, W, 4]
         rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
         rgba_pil = Image.fromarray(rgba_img)
-        rgba_pil.save("color.png")
+        rgba_pil.save(f"color_{idx_str}.png")
 
-    def take_depth_picture(self):
-        # Render all camera buffers
-        self.camera.take_picture()
         position = self.camera.get_picture("Position")  # [H, W, 4]
-        valid = position[..., 3] < 1
+        np.save(f"position_{idx_str}.npy", position)
 
-        # Save a depth image
-        depth = -position[..., 2]
-        depth[~valid] = 0 
+        model_matrix = self.camera.get_model_matrix()
+        np.save(f"pose_{idx_str}.npy", model_matrix)
 
-        # Convert to uint16 millimeters 
-        depth_image = (depth * 1000.0).astype(np.uint16)
-        depth_pil = Image.fromarray(depth_image)
-        depth_pil.save("depth.png")
+        print(f"Saved snapshot {idx_str}")
+        self.snapshot_idx += 1
 
 
     def set_controller(self, controller):
@@ -89,9 +88,8 @@ class RoombaController():
 
 class ManualController(RoombaController):
     def next(self, roomba, timestep):
-        if roomba.viewer.window.key_down("p"):  # Press 'p' to take the screenshot
-            roomba.take_picture()
-            roomba.take_depth_picture()
+        if roomba.viewer.window.key_press("p"):  # Press 'p' to take the screenshot
+            roomba.take_snapshot()
         camera_pose = roomba.camera.get_entity_pose()
         camera_mat = np.array(camera_pose.to_transformation_matrix())
         direction = np.array([0,0,0])

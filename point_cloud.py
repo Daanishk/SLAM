@@ -2,56 +2,62 @@ import numpy as np
 import open3d as o3d
 from PIL import Image
 import cv2
+import glob
+import os
 
-def get_camera_intrinsics_from_sapien(width, height, fovy_deg=35.0):
-    fovy = np.deg2rad(fovy_deg)
-    fx = fy = 0.5 * width / np.tan(fovy / 2.0)
-    cx = (width - 1) / 2.0
-    cy = (height - 1) / 2.0
-    K = np.array([[fx, 0,  cx],
-                  [0,  fy, cy],
-                  [0,  0,  1 ]])
-    return K
+def cleanup_snapshots():
+    patterns = ["color_*.png", "depth_*.png", "pose_*.npy", "position_*.npy"]
+    for pattern in patterns:
+        for fn in glob.glob(pattern):
+            try:
+                os.remove(fn)
+            except FileNotFoundError:
+                pass
 
+def build_merged_cloud_from_snapshots():
+    pos_files = sorted(glob.glob("position_*.npy"))
+    if not pos_files:
+        raise RuntimeError("No position_*.npy files found.")
 
-def depth_to_camera_frame_point_cloud(depth, K):
-    H, W = depth.shape
-    x, y = np.meshgrid(np.arange(W), np.arange(H))
+    all_points = []
+    all_colors = []
 
-    mask = (depth > 0) & np.isfinite(depth)
+    for pos_path in pos_files:
+        stem = os.path.splitext(os.path.basename(pos_path))[0]   # e.g., 'depth_000'
+        suffix = stem.split("_")[1]                                # '000'
 
-    x_valid = x[mask]
-    y_valid = y[mask]
-    z_valid = depth[mask]
+        color_path = f"color_{suffix}.png"
+        pose_path = f"pose_{suffix}.npy"
 
-    flat = np.stack([x_valid, y_valid, np.ones_like(x_valid)], axis=-1).T
-    K_inv = np.linalg.inv(K)
-    rays = K_inv @ flat
-    pts_cam = (rays * z_valid).T    # N x 3
+        position = np.load(pos_path)       
+        valid = position[..., 3] < 1
+        pts_opengl = position[..., :3][valid]   
 
-    return pts_cam, mask
+        color = cv2.imread(color_path, cv2.IMREAD_COLOR)
+        color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+        color = color.astype(np.float32) / 255.0
+        cols_valid = color[valid]
 
+        model_matrix = np.load(pose_path) 
+        R = model_matrix[:3, :3]
+        t = model_matrix[:3, 3]
+        pts_world = pts_opengl @ R.T + t
 
-def make_o3d_cloud_from_files(depth_path="depth.png", color_path="color.png"):
-    # depth: uint16 in mm
-    depth_mm = np.array(Image.open(depth_path)).astype(np.float32)
-    depth = depth_mm / 1000.0  # m
-    H, W = depth.shape
+        all_points.append(pts_world)
+        all_colors.append(cols_valid)
 
-    color = cv2.imread(color_path, cv2.IMREAD_COLOR)
-    color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
-    color = color.astype(np.float32) / 255.0
-
-    K = get_camera_intrinsics_from_sapien(W, H, fovy_deg=35.0)
-
-    pts_cam, mask = depth_to_camera_frame_point_cloud(depth, K)
-    colors_valid = color[mask]
+    pts_merged = np.concatenate(all_points, axis=0)
+    cols_merged = np.concatenate(all_colors, axis=0)
 
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pts_cam.astype(np.float64))
-    pcd.colors = o3d.utility.Vector3dVector(colors_valid.astype(np.float64))
+    pcd.points = o3d.utility.Vector3dVector(pts_merged.astype(np.float64))
+    pcd.colors = o3d.utility.Vector3dVector(cols_merged.astype(np.float64))
+
     return pcd
 
-def visualize_roomba_cloud(depth_path="depth.png", color_path="color.png"):
-    pcd = make_o3d_cloud_from_files(depth_path, color_path)
+
+def visualize_merged_snapshots(cleanup = True):
+    pcd = build_merged_cloud_from_snapshots()
     o3d.visualization.draw_geometries([pcd])
+    if cleanup:
+        cleanup_snapshots()
