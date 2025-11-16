@@ -1,4 +1,5 @@
 import sapien
+import trimesh
 from sapien.utils.viewer import Viewer
 import numpy as np
 from PIL import Image, ImageColor
@@ -58,8 +59,20 @@ class Roomba:
         rgba_pil.save("color.png")
 
     def take_depth_picture(self):
-        # @TODO: Take Depth Picture. Convert to point cloud.
-        pass
+        # Render all camera buffers
+        self.camera.take_picture()
+        position = self.camera.get_picture("Position")  # [H, W, 4]
+        valid = position[..., 3] < 1
+
+        # Save a depth image
+        depth = -position[..., 2]
+        depth[~valid] = 0 
+
+        # Convert to uint16 millimeters 
+        depth_image = (depth * 1000.0).astype(np.uint16)
+        depth_pil = Image.fromarray(depth_image)
+        depth_pil.save("depth.png")
+
 
     def set_controller(self, controller):
         self.controller = controller
@@ -78,6 +91,7 @@ class ManualController(RoombaController):
     def next(self, roomba, timestep):
         if roomba.viewer.window.key_down("p"):  # Press 'p' to take the screenshot
             roomba.take_picture()
+            roomba.take_depth_picture()
         camera_pose = roomba.camera.get_entity_pose()
         camera_mat = np.array(camera_pose.to_transformation_matrix())
         direction = np.array([0,0,0])

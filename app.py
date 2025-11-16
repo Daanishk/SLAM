@@ -15,6 +15,7 @@ from transforms3d.euler import mat2euler
 import cv2
 from roomba import *
 from floor import *
+from point_cloud import visualize_roomba_cloud
 
 def create_scene():
     scene = sapien.Scene()
@@ -138,21 +139,10 @@ def main():
 
     roomba = Roomba(scene, viewer)
 
-    # # We show how to set the viewer according to the pose of a camera
-    # # opengl camera -> sapien world
-    # model_matrix = roomba.camera.get_model_matrix()
-    # # sapien camera -> sapien world
-    # # You can also infer it from the camera pose
-    # model_matrix = model_matrix[:, [2, 0, 1, 3]] * np.array([-1, -1, 1, 1])
-    # # The rotation of the viewer camera is represented as [roll(x), pitch(-y), yaw(-z)]
-    # rpy = mat2euler(model_matrix[:3, :3]) * np.array([1, -1, -1])
-    # viewer.set_camera_xyz(*model_matrix[0:3, 3])
-    # viewer.set_camera_rpy(*rpy)
-    # viewer.window.set_camera_parameters(near=0.05, far=100, fovy=1)
-
-    controller = TrajectoryController([np.array([4,-1,0])])
+    controller = ManualController()
     roomba.set_controller(controller)
 
+    # We show how to set the viewer according to the pose of a camera
     sync_viewer_to_roomba(viewer, roomba)
     viewer.window.set_camera_parameters(near=0.05, far=100, fovy=1)
 
@@ -163,9 +153,10 @@ def main():
 
         #syncing viewer to roomba 
         sync_viewer_to_roomba(viewer, roomba)
-        
+
         viewer.render()
 
+    visualize_roomba_cloud("depth.png", "color.png")
 
 if __name__ == "__main__":
     main()
