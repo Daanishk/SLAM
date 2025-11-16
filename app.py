@@ -15,6 +15,7 @@ from transforms3d.euler import mat2euler
 import cv2
 from roomba import *
 from floor import *
+from point_cloud import *
 
 def create_scene():
     scene = sapien.Scene()
@@ -31,6 +32,7 @@ def create_scene():
 def load_floor_plan(floor, scene):
     image = floor.tiles
     unique_colors = np.unique(image.reshape(-1, image.shape[-1]), axis=0)
+
 
     width = 1
     height = 5
@@ -61,6 +63,18 @@ def load_floor_plan(floor, scene):
 
             # Set collision group so they all don't collide with each other
             shapes[1].get_collision_shapes()[0].set_collision_groups([1,1,1,1])
+
+def sync_viewer_to_roomba(viewer, roomba):
+    # OpenGL cam -> SAPIEN world
+    model_matrix = roomba.camera.get_model_matrix()
+    # SAPIEN cam -> SAPIEN world
+    model_matrix = model_matrix[:, [2, 0, 1, 3]] * np.array([-1, -1, 1, 1])
+
+    # Viewer uses [roll(x), pitch(-y), yaw(-z)]
+    rpy = mat2euler(model_matrix[:3, :3]) * np.array([1, -1, -1])
+
+    viewer.set_camera_xyz(*model_matrix[0:3, 3])
+    viewer.set_camera_rpy(*rpy)
 
 def main():
     scene = create_scene()
@@ -125,27 +139,24 @@ def main():
 
     roomba = Roomba(scene, viewer)
 
-    # We show how to set the viewer according to the pose of a camera
-    # opengl camera -> sapien world
-    model_matrix = roomba.camera.get_model_matrix()
-    # sapien camera -> sapien world
-    # You can also infer it from the camera pose
-    model_matrix = model_matrix[:, [2, 0, 1, 3]] * np.array([-1, -1, 1, 1])
-    # The rotation of the viewer camera is represented as [roll(x), pitch(-y), yaw(-z)]
-    rpy = mat2euler(model_matrix[:3, :3]) * np.array([1, -1, -1])
-    viewer.set_camera_xyz(*model_matrix[0:3, 3])
-    viewer.set_camera_rpy(*rpy)
-    viewer.window.set_camera_parameters(near=0.05, far=100, fovy=1)
-
-    controller = TrajectoryController([np.array([2,-1,0])])
+    controller = ManualController()
     roomba.set_controller(controller)
+
+    # We show how to set the viewer according to the pose of a camera
+    sync_viewer_to_roomba(viewer, roomba)
+    viewer.window.set_camera_parameters(near=0.05, far=100, fovy=1)
 
     while not viewer.closed:
         scene.step()
         scene.update_render()
         roomba.perform_action(scene.get_timestep())
+
+        #syncing viewer to roomba 
+        sync_viewer_to_roomba(viewer, roomba)
+
         viewer.render()
 
+    visualize_merged_snapshots()
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,5 @@
 import sapien
+import trimesh
 from sapien.utils.viewer import Viewer
 import numpy as np
 from PIL import Image, ImageColor
@@ -12,6 +13,9 @@ class Roomba:
         near, far = 0.1, 100
         width, height = 640, 480
         half_size = np.array([0.1, 0.1, 0.1])
+
+        # idx for file saving
+        self.snapshot_idx = 0
 
         # Create Roomba with attached actor
 
@@ -50,16 +54,24 @@ class Roomba:
     def stop(self):
         self.camera_body.set_linear_velocity(np.array([0,0,0]))
 
-    def take_picture(self):
-        self.camera.take_picture()  # submit rendering jobs to the GPU
+    def take_snapshot(self):
+        self.camera.take_picture()
+        idx_str = f"{self.snapshot_idx:03d}" 
+
         rgba = self.camera.get_picture("Color")  # [H, W, 4]
         rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
         rgba_pil = Image.fromarray(rgba_img)
-        rgba_pil.save("color.png")
+        rgba_pil.save(f"color_{idx_str}.png")
 
-    def take_depth_picture(self):
-        # @TODO: Take Depth Picture. Convert to point cloud.
-        pass
+        position = self.camera.get_picture("Position")  # [H, W, 4]
+        np.save(f"position_{idx_str}.npy", position)
+
+        model_matrix = self.camera.get_model_matrix()
+        np.save(f"pose_{idx_str}.npy", model_matrix)
+
+        print(f"Saved snapshot {idx_str}")
+        self.snapshot_idx += 1
+
 
     def set_controller(self, controller):
         self.controller = controller
@@ -76,8 +88,8 @@ class RoombaController():
 
 class ManualController(RoombaController):
     def next(self, roomba, timestep):
-        if roomba.viewer.window.key_down("p"):  # Press 'p' to take the screenshot
-            roomba.take_picture()
+        if roomba.viewer.window.key_press("p"):  # Press 'p' to take the screenshot
+            roomba.take_snapshot()
         camera_pose = roomba.camera.get_entity_pose()
         camera_mat = np.array(camera_pose.to_transformation_matrix())
         direction = np.array([0,0,0])
