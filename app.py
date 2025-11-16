@@ -15,7 +15,7 @@ from transforms3d.euler import mat2euler
 import cv2
 from roomba import *
 from floor import *
-from point_cloud import *
+from point_cloud_trimesh import *
 
 def create_scene():
     scene = sapien.Scene()
@@ -32,7 +32,6 @@ def create_scene():
 def load_floor_plan(floor, scene):
     image = floor.tiles
     unique_colors = np.unique(image.reshape(-1, image.shape[-1]), axis=0)
-
 
     width = 1
     height = 5
@@ -65,16 +64,21 @@ def load_floor_plan(floor, scene):
             shapes[1].get_collision_shapes()[0].set_collision_groups([1,1,1,1])
 
 def sync_viewer_to_roomba(viewer, roomba):
-    # OpenGL cam -> SAPIEN world
-    model_matrix = roomba.camera.get_model_matrix()
-    # SAPIEN cam -> SAPIEN world
-    model_matrix = model_matrix[:, [2, 0, 1, 3]] * np.array([-1, -1, 1, 1])
+    # # OpenGL cam -> SAPIEN world
+    # model_matrix = roomba.camera.get_model_matrix()
+    # # SAPIEN cam -> SAPIEN world
+    # model_matrix = model_matrix[:, [2, 0, 1, 3]] * np.array([-1, -1, 1, 1])
 
-    # Viewer uses [roll(x), pitch(-y), yaw(-z)]
-    rpy = mat2euler(model_matrix[:3, :3]) * np.array([1, -1, -1])
+    # # Viewer uses [roll(x), pitch(-y), yaw(-z)]
+    # rpy = mat2euler(model_matrix[:3, :3]) * np.array([1, -1, -1])
 
-    viewer.set_camera_xyz(*model_matrix[0:3, 3])
-    viewer.set_camera_rpy(*rpy)
+    # viewer.set_camera_xyz(*model_matrix[0:3, 3])
+    # viewer.set_camera_rpy(*rpy)
+
+    # We can just set the pose of the viewer camera to the pose of the camera without having to multiply    
+    camera_pose = roomba.camera.get_entity_pose()
+    camera_mat = np.array(camera_pose.to_transformation_matrix())
+    viewer.set_camera_pose(sapien.Pose(camera_mat))
 
 def main():
     scene = create_scene()
@@ -82,32 +86,6 @@ def main():
     floor = Floor(1, 1, 5)
     floor.set_image("floor.png")
     load_floor_plan(floor, scene)
-
-    # # ---------------------------------------------------------------------------- #
-    # # XYZ position in the camera space
-    # # ---------------------------------------------------------------------------- #
-    # # Each pixel is (x, y, z, render_depth) in camera space (OpenGL/Blender)
-    # position = camera.get_picture("Position")  # [H, W, 4]
-
-    # # OpenGL/Blender: y up and -z forward
-    # points_opengl = position[..., :3][position[..., 3] < 1]
-    # points_color = rgba[position[..., 3] < 1]
-    # # Model matrix is the transformation from OpenGL camera space to SAPIEN world space
-    # # camera.get_model_matrix() must be called after scene.update_render()!
-    # model_matrix = camera.get_model_matrix()
-    # points_world = points_opengl @ model_matrix[:3, :3].T + model_matrix[:3, 3]
-
-    # # SAPIEN CAMERA: z up and x forward
-    # # points_camera = points_opengl[..., [2, 0, 1]] * [-1, -1, 1]
-
-    # points_color = (np.clip(points_color, 0, 1) * 255).astype(np.uint8)
-    # trimesh.PointCloud(points_world, points_color).show()
-
-    # # Depth
-    # depth = -position[..., 2]
-    # depth_image = (depth * 1000.0).astype(np.uint16)
-    # depth_pil = Image.fromarray(depth_image)
-    # depth_pil.save("depth.png")
 
     # # ---------------------------------------------------------------------------- #
     # # Segmentation labels
@@ -139,7 +117,7 @@ def main():
 
     roomba = Roomba(scene, viewer)
 
-    controller = ManualController()
+    controller = ManualSlamController()
     roomba.set_controller(controller)
 
     # We show how to set the viewer according to the pose of a camera
