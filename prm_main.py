@@ -27,10 +27,11 @@ def main():
               (132, 226), (141, 159), (127, 55), # black corridoor
               (190, 191), (193, 211), # green room
               (218, 63), (198, 130) ] # red room 
+    outside_points = [(0, 0), (300, 300)]
 
     # query planner
     source = points[7]
-    goal = points[9]
+    goal = outside_points[0]
     path = prm_planner.plan(source, goal)
     
     prm_planner.visualize_prm(path)    
