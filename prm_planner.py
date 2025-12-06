@@ -1,3 +1,4 @@
+from networkx.exception import NetworkXNoPath
 from prm_util import *
 
 class PRMPlanner():
@@ -61,11 +62,15 @@ class PRMPlanner():
                     self.tiles_free)
                 should_remove_after[i] = True
         # now find shortest distance 
-        path = shortest_path(self.map, source ,goal)
-        # clean up 
-        for i in range(len(source_goal)):
-            if should_remove_after[i]:
-                self.map.remove_node(source_goal[i])
+        try:
+            path = shortest_path(self.map, source ,goal)
+        except NetworkXNoPath:
+            path = None
+        finally:
+            # clean up 
+            for i in range(len(source_goal)):
+                if should_remove_after[i]:
+                    self.map.remove_node(source_goal[i])
         return path
 
     """
