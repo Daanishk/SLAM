@@ -1,5 +1,5 @@
 import numpy as np
-import open3d as o3d
+import trimesh
 from PIL import Image
 import cv2
 import glob
@@ -49,15 +49,13 @@ def build_merged_cloud_from_snapshots():
     pts_merged = np.concatenate(all_points, axis=0)
     cols_merged = np.concatenate(all_colors, axis=0)
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pts_merged.astype(np.float64))
-    pcd.colors = o3d.utility.Vector3dVector(cols_merged.astype(np.float64))
+    cols_merged = (np.clip(cols_merged, 0, 1) * 255).astype(np.uint8)
 
-    return pcd
+    return pts_merged, cols_merged
 
 
 def visualize_merged_snapshots(cleanup = True):
-    pcd = build_merged_cloud_from_snapshots()
-    o3d.visualization.draw_geometries([pcd])
+    pts_merged, cols_merged = build_merged_cloud_from_snapshots()
+    trimesh.PointCloud(pts_merged, cols_merged).show()
     if cleanup:
         cleanup_snapshots()

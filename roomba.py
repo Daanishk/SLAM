@@ -2,7 +2,10 @@ import sapien
 import trimesh
 from sapien.utils.viewer import Viewer
 import numpy as np
+import cv2
 from PIL import Image, ImageColor
+
+from floor import Floor
 
 class Roomba:
     def __init__(self, scene, viewer):
@@ -61,18 +64,41 @@ class Roomba:
         rgba = self.camera.get_picture("Color")  # [H, W, 4]
         rgba_img = (rgba * 255).clip(0, 255).astype("uint8")
         rgba_pil = Image.fromarray(rgba_img)
-        rgba_pil.save(f"color_{idx_str}.png")
+        rgba_pil.save(f"snapshots/color_{idx_str}.png")
 
         position = self.camera.get_picture("Position")  # [H, W, 4]
-        np.save(f"position_{idx_str}.npy", position)
+        np.save(f"snapshots/position_{idx_str}.npy", position)
 
         model_matrix = self.camera.get_model_matrix()
-        np.save(f"pose_{idx_str}.npy", model_matrix)
+        np.save(f"snapshots/pose_{idx_str}.npy", model_matrix)
 
         print(f"Saved snapshot {idx_str}")
         self.snapshot_idx += 1
 
+        return rgba_img
 
+    def load_snapshot(self, idx):
+        pos_path = f"snapshots/position_{idx}.npy"
+        position = np.load(pos_path)
+        pose_path = f"snapshots/pose_{idx}.npy"
+        pose = np.load(pose_path)
+
+        color_path = f"snapshots/color_{idx}.png"
+        color = cv2.imread(color_path, cv2.IMREAD_COLOR)
+        color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+        rgba = color.astype(np.float32) / 255.0
+
+        # OpenGL/Blender: y up and -z forward
+        points_opengl = position[..., :3][position[..., 3] < 1]
+        points_color = rgba[position[..., 3] < 1]
+        # Model matrix is the transformation from OpenGL camera space to SAPIEN world space
+        points_world = points_opengl @ pose[:3, :3].T + pose[:3, 3]
+        return points_world, points_color
+
+    def visualize_depth_picture(self, points_world, points_color):
+        points_color = (np.clip(points_color, 0, 1) * 255).astype(np.uint8)
+        trimesh.PointCloud(points_world, points_color).show()
+        
     def set_controller(self, controller):
         self.controller = controller
 
@@ -90,6 +116,7 @@ class ManualController(RoombaController):
     def next(self, roomba, timestep):
         if roomba.viewer.window.key_press("p"):  # Press 'p' to take the screenshot
             roomba.take_snapshot()
+            self.handle_snapshot(roomba)
         camera_pose = roomba.camera.get_entity_pose()
         camera_mat = np.array(camera_pose.to_transformation_matrix())
         direction = np.array([0,0,0])
@@ -108,6 +135,10 @@ class ManualController(RoombaController):
         if roomba.viewer.window.key_down("m"):
             roomba.viewer.set_camera_pose(sapien.Pose(camera_mat))
         roomba.move(direction)
+
+    def handle_snapshot(self, roomba):
+        pass
+
 
 class TrajectoryController(RoombaController):
     def __init__(self, points):
@@ -146,8 +177,48 @@ class TrajectoryController(RoombaController):
         else:
             roomba.move_forward()
 
-class SlamController(RoombaController):
-    def next(self, roomba, timestep):
-        # @TODO: Do this.
-        pass
-    
+class ManualSlamController(ManualController):
+    def __init__(self):
+        self.point_cloud = None
+        self.point_cloud_colors = None
+        self.ground_threshold = 0.1
+        self.floor = Floor(1,1,5)
+        self.floor.init_tiles(30, 30)
+
+    def handle_snapshot(self, roomba):
+        idx = f"{(roomba.snapshot_idx-1):03d}" 
+        pts, color = roomba.load_snapshot(idx)
+        points_above_ground = np.where(pts[:, 2] > self.ground_threshold)
+        pts = pts[points_above_ground]
+        color = color[points_above_ground]
+
+        # Iterate through points in point cloud
+        for i in range(pts.shape[0]):
+            point = pts[i]
+            pixel = self.convert_point_to_pixel(point)
+
+            # @TODO: Things aren't quite correct here
+            # # If pixel is left of it, then we need to move it to the right by 1
+            # if pixel[1] - roomba_pos[1] <= 0:
+            #     pixel -= np.array([0,1])
+
+            # # If pixel is above it, then we need to move it up by 1
+            # if pixel[0] - roomba_pos[0] < 0:
+            #     pixel -= np.array([1,0])
+
+            pixel = np.array([15, 15]) + pixel
+
+            # @TODO Has trouble with doorways
+
+            pixel_color = (color[i,:3] * 255).astype(np.uint8)
+            
+            # Has orange color, I think from the camera visual
+            if pixel_color[0] in [235, 236] and pixel_color[1] in [146,147,148] and pixel_color[2] in [47, 48]:
+                continue
+            self.floor.tiles[pixel[0],pixel[1]] = pixel_color
+        
+        self.floor.save_image("slam_floor.png")
+
+    def convert_point_to_pixel(self, point):
+        pixel = np.rint(point / np.array([self.floor.tile_width, self.floor.tile_length, 1]))
+        return np.int32(pixel[:2])
