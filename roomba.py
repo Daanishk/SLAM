@@ -201,13 +201,31 @@ class ManualSlamController(ManualController):
         self.floor = Floor(1,1,5)
         self.width = 30
         self.height = 30
+        self.center = np.array([self.height // 2, self.width // 2])
         self.floor.init_tiles(self.width, self.height)
+        self.frontier_cells = None
 
     def in_bounds(self, rc):
         r, c = rc
         return 0 <= r < self.height and 0 <= c < self.width
-        
+    
+    def get_roomba_pixel_position(self, roomba):
+        mat = roomba.get_pose_as_transformation_matrix()
+        roomba_pos_world = mat[:2, 3]        
+        roomba_pos_3d = np.array([roomba_pos_world[0],
+                                  roomba_pos_world[1],
+                                  0.0], dtype=np.float32)
 
+        # roomba cell in grid
+        roomba_pixel = self.convert_point_to_pixel(roomba_pos_3d)
+        roomba_pixel = self.center + roomba_pixel
+
+        return roomba_pixel
+        
+    # handle_snapshot does numerous things:
+    # - collects relevantly indexed snapshot; filters out wall pixels; 
+    # get's the roomba's position and sets it as free in the occupancy map;
+    # Goes through all the valid pixels and populates the tile and occupancy array
     def handle_snapshot(self, roomba):
         idx = f"{(roomba.snapshot_idx-1):03d}" 
         pts, color = roomba.load_snapshot(idx)
@@ -216,17 +234,9 @@ class ManualSlamController(ManualController):
         color = color[points_above_ground]
 
         # Getting roomba postion
-        mat = roomba.get_pose_as_transformation_matrix()
-        roomba_pos_world = mat[:2, 3]        
-        roomba_pos_3d = np.array([roomba_pos_world[0],
-                                  roomba_pos_world[1],
-                                  0.0], dtype=np.float32)
+        roomba_pixel = self.get_roomba_pixel_position(roomba)
 
-        # robot cell in grid
-        roomba_pixel = self.convert_point_to_pixel(roomba_pos_3d)
-        roomba_pixel = np.array([15, 15]) + roomba_pixel
-
-        # mark robot cell itself as free
+        # mark roomba cell itself as free
         if self.in_bounds(roomba_pixel):
             self.floor.occupancy[roomba_pixel[0], roomba_pixel[1]] = self.FREE_COLOR
 
@@ -234,22 +244,10 @@ class ManualSlamController(ManualController):
         for i in range(pts.shape[0]):
             point = pts[i]
             pixel = self.convert_point_to_pixel(point)
-
-            # @TODO: Things aren't quite correct here
-            # # If pixel is left of it, then we need to move it to the right by 1
-            # if pixel[1] - roomba_pos[1] <= 0:
-            #     pixel -= np.array([0,1])
-
-            # # If pixel is above it, then we need to move it up by 1
-            # if pixel[0] - roomba_pos[0] < 0:
-            #     pixel -= np.array([1,0])
-
-            pixel = np.array([15, 15]) + pixel
+            pixel = self.center + pixel
 
             if not self.in_bounds(pixel):
                 continue
-
-            # @TODO Has trouble with doorways
 
             pixel_color = (color[i,:3] * 255).astype(np.uint8)
             
@@ -257,7 +255,6 @@ class ManualSlamController(ManualController):
             if pixel_color[0] in [235, 236] and pixel_color[1] in [146,147,148] and pixel_color[2] in [47, 48]:
                 continue
 
-            # --------- OCCUPANCY UPDATE (ray casting) ---------
             # line of cells from robot to this wall cell
             line_cells = self.bresenham_line(roomba_pixel, pixel)
 
@@ -277,10 +274,63 @@ class ManualSlamController(ManualController):
         
         self.floor.save_image("slam_floor.png", "occupancy_grid.png")
 
-    # def get_N8_unknown_neighbours(self, point):
-    #     neighbours = []
-    #     r, c = point
-    #     width, height = self.occupancy.shape
+    def get_N8_unknown_neighbours(self, point):
+        neighbours = []
+        r, c = point
+        directions = [[-1, -1], [0,-1], [1, -1],
+                      [-1, 0],          [1, 0],
+                      [-1, 1],  [0, 1], [1, 1]]
+        
+        for x, y in directions:
+            nx = r + x
+            ny = c + y 
+            if self.in_bounds((nx, ny)):
+                considered_neighbour = self.floor.occupancy[nx, ny]
+                if np.array_equal(considered_neighbour, self.UNKNOWN_COLOR):
+                    neighbours.append((nx, ny))
+
+        return neighbours
+    
+    def get_frontier_cells(self):
+        frontier_cells = []
+
+        for r in range(self.height):
+            for c in range(self.width):
+                if np.array_equal(self.floor.occupancy[r, c], self.FREE_COLOR):
+                    neighbours = self.get_N8_unknown_neighbours((r,c))
+
+                    if (len(neighbours) > 0):
+                        frontier_cells.append((r,c))
+
+        return np.array(frontier_cells, dtype = int)
+
+
+    def get_target_frontier_cell(self, roomba, visited_frontiers=None):
+        self.frontier_cells = self.get_frontier_cells()
+        if self.frontier_cells.size == 0:
+            return None
+
+        roomba_pixel = self.get_roomba_pixel_position(roomba)
+        dists = np.linalg.norm(self.frontier_cells - roomba_pixel, axis=1)
+
+        min_dist = 1.0  
+        valid_mask = dists > min_dist
+
+        if visited_frontiers is not None and len(visited_frontiers) > 0:
+            not_visited = np.array(
+                [tuple(rc) not in visited_frontiers for rc in self.frontier_cells]
+            )
+            valid_mask &= not_visited
+
+        if not np.any(valid_mask):
+            return None
+
+        filtered_frontiers = self.frontier_cells[valid_mask]
+        filtered_dists = dists[valid_mask]
+
+        closest_idx = np.argmin(filtered_dists)
+        target_frontier = filtered_frontiers[closest_idx]
+        return target_frontier
 
 
     def bresenham_line(self, start, end):
@@ -307,7 +357,49 @@ class ManualSlamController(ManualController):
                 c0 += sc
         return points
     
+    def convert_pixel_to_point(self, rc):
+        r, c = rc
+        # undo the center shift
+        rc_centered = np.array([r, c]) - self.center
+        x = rc_centered[0] * self.floor.tile_width
+        y = rc_centered[1] * self.floor.tile_length
+        return np.array([x, y], dtype=float)
 
     def convert_point_to_pixel(self, point):
         pixel = np.rint(point / np.array([self.floor.tile_width, self.floor.tile_length, 1]))
         return np.int32(pixel[:2])
+    
+class FrontierExplorationController(RoombaController):
+    def __init__(self):
+        # mapper has floor, occupancy, handle_snapshot, frontier logic
+        self.mapper = ManualSlamController()
+        self.traj = None
+        self.exploration_done = False
+        self.just_started = True
+        self.visited_frontiers = set()
+
+    def next(self, roomba, timestep):
+        if self.exploration_done:
+            roomba.stop()
+            return
+
+        if self.traj is None or self.traj.completed:
+            roomba.take_snapshot()
+            self.mapper.handle_snapshot(roomba)
+
+            target_rc = self.mapper.get_target_frontier_cell(roomba, visited_frontiers=self.visited_frontiers)
+            if target_rc is None:
+                print("Exploration finished: no frontier cells left.")
+                self.exploration_done = True
+                roomba.stop()
+                return
+
+            self.visited_frontiers.add(tuple(target_rc))
+                
+            target_xy = self.mapper.convert_pixel_to_point(target_rc)
+
+            print(f"New target frontier at grid {target_rc}, world {target_xy}")
+            self.traj = TrajectoryController([target_xy])
+            return 
+
+        self.traj.next(roomba, timestep)

@@ -117,7 +117,7 @@ def main():
 
     roomba = Roomba(scene, viewer)
 
-    controller = ManualSlamController()
+    controller = FrontierExplorationController()
     roomba.set_controller(controller)
 
     # We show how to set the viewer according to the pose of a camera
