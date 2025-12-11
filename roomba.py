@@ -33,7 +33,7 @@ class Roomba:
             pose=sapien.Pose(np.eye(4)),
             width=width,
             height=height,
-            fovy=np.deg2rad(35),
+            fovy=np.deg2rad(36),
             near=near,
             far=far,
         )
@@ -43,6 +43,7 @@ class Roomba:
         return np.array(self.camera.get_entity_pose().to_transformation_matrix())
 
     def move_forward(self):
+        self.camera_body.set_angular_velocity(np.array([0,0,0]))
         self.move(np.array([1,0,0]))
 
     def move(self, direction):
@@ -161,29 +162,51 @@ class TrajectoryController(RoombaController):
         roomba_pos = mat[:2,3]
 
         roomba_to_point = curr_point - roomba_pos
+
+        # Checking to see if we've reached the waypoint
         if (np.linalg.norm(roomba_to_point) < .1):
             self.next_objective()
             return
 
         roomba_to_point = roomba_to_point / np.linalg.norm(roomba_to_point)
-        cos_theta = np.dot(roomba_dir / np.linalg.norm(roomba_dir), roomba_to_point)
-        theta = np.arccos(cos_theta)
-        if theta > np.pi / 2:
-            theta = theta - np.pi
+
+        # Obtaining rotation angle [-2pi, 2pi]
+        target_theta = np.arctan2(roomba_to_point[1], roomba_to_point[0])
+        roomba_theta = np.arctan2(roomba_dir[1], roomba_dir[0])
+        theta = target_theta - roomba_theta
+
+        # making sure to obtain smallest absolute angle
+        if (abs(theta) > np.pi):
+            theta = theta - (np.sign(theta) * 2 * np.pi)
         theta_degrees = theta * 180 / np.pi
-        # @TODO: Make this work (i.e. turn left as well) and/or do a learning-based approach
-        if np.abs(theta_degrees) > 5 or cos_theta < 0:
+
+        # Updating direction depending on magnitude of angle
+        epsilon = 5
+        if theta_degrees > epsilon:
+            roomba.turn_left()
+        elif theta_degrees < -epsilon:
             roomba.turn_right()
         else:
             roomba.move_forward()
 
 class ManualSlamController(ManualController):
+    UNKNOWN_COLOR = np.array([127, 127, 127], dtype=np.uint8)
+    FREE_COLOR = np.array([255, 255, 255], dtype=np.uint8)
+    OCC_COLOR = np.array([0,   0,   0  ], dtype=np.uint8)
+
     def __init__(self):
         self.point_cloud = None
         self.point_cloud_colors = None
         self.ground_threshold = 0.1
         self.floor = Floor(1,1,5)
-        self.floor.init_tiles(30, 30)
+        self.width = 30
+        self.height = 30
+        self.floor.init_tiles(self.width, self.height)
+
+    def in_bounds(self, rc):
+        r, c = rc
+        return 0 <= r < self.height and 0 <= c < self.width
+        
 
     def handle_snapshot(self, roomba):
         idx = f"{(roomba.snapshot_idx-1):03d}" 
@@ -191,6 +214,21 @@ class ManualSlamController(ManualController):
         points_above_ground = np.where(pts[:, 2] > self.ground_threshold)
         pts = pts[points_above_ground]
         color = color[points_above_ground]
+
+        # Getting roomba postion
+        mat = roomba.get_pose_as_transformation_matrix()
+        roomba_pos_world = mat[:2, 3]        
+        roomba_pos_3d = np.array([roomba_pos_world[0],
+                                  roomba_pos_world[1],
+                                  0.0], dtype=np.float32)
+
+        # robot cell in grid
+        roomba_pixel = self.convert_point_to_pixel(roomba_pos_3d)
+        roomba_pixel = np.array([15, 15]) + roomba_pixel
+
+        # mark robot cell itself as free
+        if self.in_bounds(roomba_pixel):
+            self.floor.occupancy[roomba_pixel[0], roomba_pixel[1]] = self.FREE_COLOR
 
         # Iterate through points in point cloud
         for i in range(pts.shape[0]):
@@ -208,6 +246,9 @@ class ManualSlamController(ManualController):
 
             pixel = np.array([15, 15]) + pixel
 
+            if not self.in_bounds(pixel):
+                continue
+
             # @TODO Has trouble with doorways
 
             pixel_color = (color[i,:3] * 255).astype(np.uint8)
@@ -215,9 +256,57 @@ class ManualSlamController(ManualController):
             # Has orange color, I think from the camera visual
             if pixel_color[0] in [235, 236] and pixel_color[1] in [146,147,148] and pixel_color[2] in [47, 48]:
                 continue
+
+            # --------- OCCUPANCY UPDATE (ray casting) ---------
+            # line of cells from robot to this wall cell
+            line_cells = self.bresenham_line(roomba_pixel, pixel)
+
+            # all but last cell = free if not already occupied
+            for r, c in line_cells[:-1]:
+                if not self.in_bounds((r, c)):
+                    continue
+                if np.array_equal(self.floor.occupancy[r, c], self.UNKNOWN_COLOR):
+                    self.floor.occupancy[r, c] = self.FREE_COLOR
+
+            # last cell = occupied (wall)
+            end_r, end_c = line_cells[-1]
+            if self.in_bounds((end_r, end_c)):
+                self.floor.occupancy[end_r, end_c] = self.OCC_COLOR
+
             self.floor.tiles[pixel[0],pixel[1]] = pixel_color
         
-        self.floor.save_image("slam_floor.png")
+        self.floor.save_image("slam_floor.png", "occupancy_grid.png")
+
+    # def get_N8_unknown_neighbours(self, point):
+    #     neighbours = []
+    #     r, c = point
+    #     width, height = self.occupancy.shape
+
+
+    def bresenham_line(self, start, end):
+        r0, c0 = int(start[0]), int(start[1])
+        r1, c1 = int(end[0]), int(end[1])
+        points = []
+
+        dr = abs(r1 - r0)
+        dc = abs(c1 - c0)
+        sr = 1 if r0 < r1 else -1
+        sc = 1 if c0 < c1 else -1
+
+        err = dr - dc
+        while True:
+            points.append((r0, c0))
+            if r0 == r1 and c0 == c1:
+                break
+            e2 = 2 * err
+            if e2 > -dc:
+                err -= dc
+                r0 += sr
+            if e2 < dr:
+                err += dr
+                c0 += sc
+        return points
+    
 
     def convert_point_to_pixel(self, point):
         pixel = np.rint(point / np.array([self.floor.tile_width, self.floor.tile_length, 1]))
