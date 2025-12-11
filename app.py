@@ -121,7 +121,7 @@ def main():
     roomba.set_controller(controller)
 
     # We show how to set the viewer according to the pose of a camera
-    sync_viewer_to_roomba(viewer, roomba)
+    # sync_viewer_to_roomba(viewer, roomba)
     viewer.window.set_camera_parameters(near=0.05, far=100, fovy=1)
 
     while not viewer.closed:
@@ -130,7 +130,7 @@ def main():
         roomba.perform_action(scene.get_timestep())
 
         #syncing viewer to roomba 
-        sync_viewer_to_roomba(viewer, roomba)
+        # sync_viewer_to_roomba(viewer, roomba)ppp
 
         viewer.render()
 

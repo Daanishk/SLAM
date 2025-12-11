@@ -8,14 +8,18 @@ class Floor:
         self.wall_height = wall_height
 
     def init_tiles(self, width, height):
-        self.tiles = np.ones((width,height,3),dtype=np.uint8) * 255
+        self.occupancy = np.full((height, width, 3), 127, dtype=np.uint8)  # gray = unknown
+        self.tiles = np.ones((height, width, 3), dtype=np.uint8) * 255  
 
     def set_image(self, image_path):
         self.tiles = cv2.cvtColor(cv2.imread(image_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
 
-    def save_image(self, image_path):
+    def save_image(self, image_path_tile, image_path_occupancy = None):
         if (self.tiles is not None):
-            cv2.imwrite(image_path, cv2.cvtColor(self.tiles, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(image_path_tile, cv2.cvtColor(self.tiles, cv2.COLOR_RGB2BGR))
+
+        if (self.occupancy is not None):
+            cv2.imwrite(image_path_occupancy, cv2.cvtColor(self.occupancy, cv2.COLOR_RGB2BGR))
 
     def display_image(self, title="Floor"):
         if (self.tiles is not None):
