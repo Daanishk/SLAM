@@ -332,6 +332,80 @@ class ManualSlamController(ManualController):
         target_frontier = filtered_frontiers[closest_idx]
         return target_frontier
 
+    def cluster_frontiers(self, frontier_cells):
+        frontier_cells = np.asarray(frontier_cells, dtype=int)
+        frontier_set = set(map(tuple, frontier_cells))
+        visited = set()
+        clusters = []
+
+        directions = [(-1, -1), (0, -1), (1, -1),
+                      (-1,  0),          (1,  0),
+                      (-1,  1), (0,  1), (1,  1)]
+
+        for cell in frontier_cells:
+            cell = tuple(cell)
+            if cell in visited:
+                continue
+
+            queue = [cell]
+            visited.add(cell)
+            cluster = [cell]
+
+            while queue:
+                r, c = queue.pop()
+                for dr, dc in directions:
+                    nr, nc = r + dr, c + dc
+                    nbr = (nr, nc)
+                    if nbr in frontier_set and nbr not in visited:
+                        visited.add(nbr)
+                        queue.append(nbr)
+                        cluster.append(nbr)
+
+            clusters.append(np.array(cluster, dtype=int))
+
+        return clusters
+
+    def get_cluster_goal(self, roomba, visited_goals=None):
+        frontier_cells = self.get_frontier_cells()
+        if frontier_cells.size == 0:
+            return None
+
+        clusters = self.cluster_frontiers(frontier_cells)
+        if not clusters:
+            return None
+
+        roomba_pixel = self.get_roomba_pixel_position(roomba)
+
+        if visited_goals is None:
+            visited_goals = set()
+
+        best_score = -np.inf
+        best_centroid = None
+
+        for cluster in clusters:
+            # centroid in grid coordinates
+            mean_rc = cluster.mean(axis=0)
+            centroid_rc = np.rint(mean_rc).astype(int)
+            centroid_t = tuple(centroid_rc)
+
+            # skip clusters we've already used as goals
+            if centroid_t in visited_goals:
+                continue
+
+            size = cluster.shape[0]
+            dist = np.linalg.norm(centroid_rc - roomba_pixel)
+
+            # tiny epsilon to avoid div by zero
+            score = size / (dist + 1e-3)
+
+            if score > best_score:
+                best_score = score
+                best_centroid = centroid_rc
+
+        if best_centroid is None:
+            return None
+
+        return best_centroid
 
     def bresenham_line(self, start, end):
         r0, c0 = int(start[0]), int(start[1])
@@ -376,7 +450,7 @@ class FrontierExplorationController(RoombaController):
         self.traj = None
         self.exploration_done = False
         self.just_started = True
-        self.visited_frontiers = set()
+        self.visited_goals = set()
 
     def next(self, roomba, timestep):
         if self.exploration_done:
@@ -387,14 +461,14 @@ class FrontierExplorationController(RoombaController):
             roomba.take_snapshot()
             self.mapper.handle_snapshot(roomba)
 
-            target_rc = self.mapper.get_target_frontier_cell(roomba, visited_frontiers=self.visited_frontiers)
+            target_rc = self.mapper.get_cluster_goal(roomba, visited_goals=self.visited_goals,)
             if target_rc is None:
                 print("Exploration finished: no frontier cells left.")
                 self.exploration_done = True
                 roomba.stop()
                 return
 
-            self.visited_frontiers.add(tuple(target_rc))
+            self.visited_goals.add(tuple(target_rc))
                 
             target_xy = self.mapper.convert_pixel_to_point(target_rc)
 
