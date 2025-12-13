@@ -414,6 +414,20 @@ class ManualSlamController(ManualController):
             return None
 
         return best_centroid
+    
+    def frontier_facing_dir(self, rc):
+        r, c = int(rc[0]), int(rc[1])
+
+        # 4-neighborhood is enough for "facing"
+        nbrs = [(-1, 0), (1, 0), (0, -1), (0, 1),   # N,S,W,E
+                (-1,-1), (-1, 1), (1, -1), (1, 1)]
+        for dr, dc in nbrs:
+            rr, cc = r + dr, c + dc
+            if not self.in_bounds((rr, cc)):
+                continue
+            if np.array_equal(self.floor.occupancy[rr, cc], self.UNKNOWN_COLOR):
+                return (dr, dc)
+        return None
 
     def bresenham_line(self, start, end):
         r0, c0 = int(start[0]), int(start[1])
@@ -521,70 +535,66 @@ class FrontierExplorationController(RoombaController):
         self.traj = None
         self.exploration_done = False
         self.just_started = True
-        self.visited_goal_angles = {}
-        self.rotate_step_deg = 60     # increment each revisit
-        self.rotate_init_deg = 90     # first revisit rotation
-        self.rotate_max_deg = 720     # optional cap; or just use % 360
-        self.pending_rotate_deg = 0  
+        self.turning_to_face = False
+        self.face_drdc = None
+        self.target_yaw = 0.0
+        self.yaw_tol = np.deg2rad(8)
 
-        self.rotating = False
-        self.rotate_remaining = 0.0  # seconds left to rotate
-        self.rotate_dir = 1    
+    # ======================= DIRECTIONAL TURNING ============================= #
+    def _yaw_from_roomba(self, roomba):
+        # yaw from camera pose rotation matrix
+        T = roomba.get_pose_as_transformation_matrix()
+        R = T[:3, :3]
+        return np.arctan2(R[1, 0], R[0, 0])
+    
+    def _wrap_pi(self, a):
+        return (a + np.pi) % (2*np.pi) - np.pi
+    
+    def _yaw_from_drdc(self, drdc):
+        dr, dc = drdc
+        return np.arctan2(dc, dr)
+    
+    def start_turn_to_face(self, face_drdc):
+        self.face_drdc = face_drdc
+        self.target_yaw = self._yaw_from_drdc(face_drdc)
+        self.turning_to_face = True
 
-        self.goal_rc = None                 # current planned goal (grid rc)
-        self.rotate_on_arrival = False 
+    def step_turn_to_face(self, roomba):
+        yaw = self._yaw_from_roomba(roomba)
+        err = self._wrap_pi(self.target_yaw - yaw)
 
-    def start_rotate(self, degrees=90):
-        # turn_left / turn_right sets angular vel to +/-1 rad/s (see Roomba.turn_left) :contentReference[oaicite:1]{index=1}
-        radians = np.deg2rad(degrees)
-        omega = 1.0  # rad/s, matches turn_left/turn_right
-        self.rotate_remaining = radians / omega
-        self.rotating = True
+        if abs(err) < self.yaw_tol:
+            roomba.stop()
+            self.turning_to_face = False
+            return True
+
+        if err > 0:
+            roomba.turn_left()
+        else:
+            roomba.turn_right()
+        return False
+    
+    # ============================================================= #
 
     def next(self, roomba, timestep):
         if self.exploration_done:
             roomba.stop()
-            return
-        
-        # If we're in a forced rotation phase, rotate and wait it out.
-        if self.rotating:
-            if self.rotate_dir > 0:
-                roomba.turn_left()
-            else:
-                roomba.turn_right()
-
-            self.rotate_remaining -= timestep
-            if self.rotate_remaining <= 0:
-                self.rotating = False
-                roomba.stop()  # stop so the next snapshot isn't mid-spin
             return
 
         # If we have no trajectory or we just finished one, update map and replan.
         if self.traj is None or self.traj.completed:
 
             if self.traj is not None and self.traj.completed:
-                if self.rotate_on_arrival:
-                    goal_t = tuple(int(x) for x in self.goal_rc)
+                if self.face_drdc is not None:
+                    if not self.turning_to_face:
+                        self.start_turn_to_face(self.face_drdc)
 
-                    deg = int(self.pending_rotate_deg)
-                    print(f"Arrived at revisited goal {list(self.goal_rc)} -> rotating {deg} deg now")
+                    done = self.step_turn_to_face(roomba)
+                    if not done:
+                        return  # keep turning, don't snapshot yet
 
-                    # alternate spin direction to avoid bias
-                    self.start_rotate(deg)
-
-                    # increment the next revisit angle for this centroid
-                    if goal_t in self.visited_goal_angles:
-                        # nxt = self.visited_goal_angles[goal_t] + self.rotate_step_deg
-                        nxt = self.visited_goal_angles[goal_t]
-                        # keep it cycling in a sane range
-                        # nxt = nxt % 360
-                        if nxt == 0:
-                            nxt = self.rotate_step_deg
-                        self.visited_goal_angles[goal_t] = nxt
-
-                    self.rotate_on_arrival = False
-                    self.pending_rotate_deg = 0
-                    return
+                    # turned successfully, clear so we don't repeat
+                    self.face_drdc = None
         
             roomba.take_snapshot()
             self.mapper.handle_snapshot(roomba)
@@ -596,15 +606,11 @@ class FrontierExplorationController(RoombaController):
                 roomba.stop()
                 return
             
-            target_t = tuple(int(x) for x in target_rc)
-
-            if target_t in self.visited_goal_angles:
-                self.rotate_on_arrival = True
-                self.pending_rotate_deg = self.visited_goal_angles[target_t]
-                print(f"Revisiting centroid {list(target_rc)} -> will rotate {self.pending_rotate_deg} deg upon arrival")
+            self.face_drdc = self.mapper.frontier_facing_dir(target_rc)
+            if self.face_drdc is None:
+                print("Frontier facing drdc: None (no unknown neighbor?)")
             else:
-                self.rotate_on_arrival = False
-                self.pending_rotate_deg = 0
+                print("Frontier facing drdc:", self.face_drdc)
             
             start_rc = self.mapper.get_roomba_pixel_position(roomba)
 
@@ -612,19 +618,10 @@ class FrontierExplorationController(RoombaController):
             if path_rc is None:
                 # Can't reach this cluster centroid with current free space.
                 # Mark this goal as visited so we don't keep retrying it forever.
-                # self.visited_goals.add(tuple(target_rc))
                 print(f"Skipping unreachable goal {target_rc}")
-                if target_t not in self.visited_goal_angles:
-                    self.visited_goal_angles[target_t] = self.rotate_init_deg
                 return
             
-            self.goal_rc = target_rc
-
-            if target_t not in self.visited_goal_angles:
-                self.visited_goal_angles[target_t] = self.rotate_init_deg
-                
             waypoints = self.mapper.path_to_world_waypoints(path_rc, step=1)
-
             print(f"New target frontier at grid {target_rc}, path len {len(path_rc)}, waypoints {len(waypoints)}")
             self.traj = TrajectoryController(waypoints)
             return 
