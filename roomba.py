@@ -3,6 +3,8 @@ import trimesh
 from sapien.utils.viewer import Viewer
 import numpy as np
 import cv2
+import os
+import json
 from PIL import Image, ImageColor
 import heapq
 
@@ -207,6 +209,47 @@ class ManualSlamController(ManualController):
         self.floor.init_tiles(self.width, self.height)
         self.frontier_cells = None
 
+        # ======= Experiment logging (coverage vs snapshot) =======
+        # Logs cumulative UNKNOWN->(FREE/OCC) discoveries per snapshot.
+        self.coverage_log_path = os.path.join("snapshots", "coverage_log.json")
+        self.cumulative_discovered = 0
+        self.prev_unknown_count = self._count_unknown_cells()
+
+    def _count_unknown_cells(self) -> int:
+        """Count UNKNOWN cells in the occupancy grid."""
+        occ = self.floor.occupancy  # HxWx3 uint8
+        return int(np.sum(np.all(occ == self.UNKNOWN_COLOR, axis=2)))
+
+    def _update_coverage_log(self, snapshot_idx: int, prev_unknown: int, curr_unknown: int) -> None:
+        """Write per-snapshot coverage metrics to a JSON file.
+
+        The JSON maps snapshot index -> {delta, total}, where:
+          delta = newly discovered cells in this snapshot (UNKNOWN -> known)
+          total = cumulative discovered cells so far
+        """
+        delta = int(max(0, prev_unknown - curr_unknown))
+        self.cumulative_discovered += delta
+        self.prev_unknown_count = curr_unknown
+
+        os.makedirs(os.path.dirname(self.coverage_log_path), exist_ok=True)
+
+        data = {}
+        if os.path.exists(self.coverage_log_path):
+            try:
+                with open(self.coverage_log_path, "r") as f:
+                    data = json.load(f) or {}
+            except Exception:
+                # If the file is corrupted or empty, start fresh.
+                data = {}
+
+        data[str(int(snapshot_idx))] = {
+            "delta": delta,
+            "total": int(self.cumulative_discovered),
+        }
+
+        with open(self.coverage_log_path, "w") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+
     def in_bounds(self, rc):
         r, c = rc
         return 0 <= r < self.height and 0 <= c < self.width
@@ -229,6 +272,9 @@ class ManualSlamController(ManualController):
     # get's the roomba's position and sets it as free in the occupancy map;
     # Goes through all the valid pixels and populates the tile and occupancy array
     def handle_snapshot(self, roomba):
+        snapshot_num = int(roomba.snapshot_idx - 1)
+        prev_unknown = self._count_unknown_cells()
+
         idx = f"{(roomba.snapshot_idx-1):03d}" 
         pts, color = roomba.load_snapshot(idx)
         points_above_ground = np.where(pts[:, 2] > self.ground_threshold)
@@ -275,6 +321,10 @@ class ManualSlamController(ManualController):
             self.floor.tiles[pixel[0],pixel[1]] = pixel_color
         
         self.floor.save_image("slam_floor.png", "occupancy_grid.png")
+
+        # Coverage logging: update JSON after map update
+        curr_unknown = self._count_unknown_cells()
+        self._update_coverage_log(snapshot_num, prev_unknown, curr_unknown)
 
     def get_N8_unknown_neighbours(self, point):
         neighbours = []
